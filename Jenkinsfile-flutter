@@ -1,0 +1,157 @@
+pipeline {
+    agent {label params['Agent']}
+    
+     parameters {
+    gitParameter branchFilter: 'origin/(.*)', defaultValue: 'master', name: 'Branch', type: 'PT_BRANCH'
+  }
+     
+      stages {
+        stage('Preparation') { 
+            steps{
+                sh 'rm -rf *'
+        }
+        }
+
+        stage('Cloning the Project') {
+            steps{
+                script{
+                    try{
+                        def cause = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+                        //slackSend (color: '#FFFF00', message: "Cloning the Project stage started - TRAVEL-CONNECT MOBILE STARTED-Branch-${Branch} : '${env.JOB_NAME} ${cause.userName} [${env.BUILD_NUMBER}]' " , channel: "mobile-builds" )
+                        git branch: "${params.Branch}", credentialsId: '78100a27-6595-4639-85fb-7a9eaabc2f84', url: 'https://gitlab.com/webelight/travel-connect/travel-connect-app'
+                        
+                         
+
+                       sh '''
+                        cd /home/jenkins/snap/flutter/common
+                        rm -rf flutter
+                        tar -xf flutter_linux_3.0.0-stable.tar.xz
+                        flutter --version
+                        
+                        '''                   
+                        
+                    }
+                    catch(Exception e) {
+                      echo "FAILED ${e}"
+                     // slackSend (color: '#FF0000', message: "Failed at Cloning the Project stage - TRAVEL-CONNECT MOBILE: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team" , channel: "mobile-builds" )  
+                      currentBuild.result = 'FAILURE'
+                      throw e
+                    }
+                }
+            }
+        }
+      
+      stage('Sonarqube Analysis'){
+            steps {
+                script{
+              try{
+                  sh 'flutter test --machine --coverage > tests.output'
+                def scannerHome = tool 'sonarqube';
+                withSonarQubeEnv("sonarqube") {
+                sh " ${scannerHome}/bin/sonar-scanner\
+                -Dsonar.projectKey=travel-connect-mobile\
+                -Dsonar.exclusions=node_modules/**,**/*.java \
+                -Dsonar.ts.coverage.lcovReportPath=coverage/raze/lcov.info \
+                -Dsonar.sources=/home/jenkins/snap/flutter/common/workspace/Travel-Connect/travel-connect-mobile \
+                -Dsonar.host.url=https://sonarqube.webelight.co.in \
+                -Dsonar.login=792d443c988f83e1268dd060abb2f011fa834ed1"
+                }}
+                catch(Exception e){
+                      echo "FAILED ${e}"
+                    //  slackSend (color: '#FF0000', message: "Failed at Sonarqube Analysis stage - travel-connect-mobile: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team" , channel: "mobile-builds" )  
+                      currentBuild.result = 'FAILURE'
+                      throw e
+                }
+    }
+    }
+  }
+                
+       stage('Building Application') {
+               steps{
+                   script{
+                       try{
+                    //    slackSend (color: '#FFFF00', message: "Building Application stage started - TRAVEL-CONNECT MOBILE STARTED-Branch-${Branch} : '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "mobile-builds" )
+                   //     sh '''
+                     //   cd /var/lib/jenkins/snap/flutter/common
+                      //  sudo rm -rf flutter
+                    //    tar -xf flutter_linux_3.0.0-stable.tar.xz
+                       
+                    //    flutter --version
+                       
+                    //    '''
+
+				if( "${params.Server}" == 'dev')  {
+				    //flutter build apk --flavor development -t lib/dev/main_dev.dart --release --target-platform android-arm,android-arm64 --split-per-abi
+					sh '''  
+                    flutter build apk --flavor development -t lib/dev/main_dev.dart
+                    zip -r release.zip build/app/outputs/apk/development/release/
+                	ls -l
+                	curl -uadmin:8g4k2NjMSKuqQbbe -T ./release.zip "https://artifactory.webelight.co.in/artifactory/travel-connect-mobile/travel-connect-dev-apk-$BUILD_NUMBER"
+					'''
+					}
+				else if("${params.Server}" == 'prod')  {
+					sh '''  
+                    flutter build apk --flavor production -t lib/prod/main_prod.dart 
+                    zip -r release.zip build/app/outputs/apk/development/release/
+                	ls -l
+                	curl -uadmin:8g4k2NjMSKuqQbbe -T ./release.zip "https://artifactory.webelight.co.in/artifactory/travel-connect-mobile/travel-connect-prod-apk-$BUILD_NUMBER"
+					'''
+				}
+				else if("${params.Server}" == 'stage')  {
+					sh '''  
+                    flutter build apk --flavor stage -t lib/stage/main_stage.dart
+                    zip -r release.zip build/app/outputs/apk/development/release/
+                	ls -l
+                	curl -uadmin:8g4k2NjMSKuqQbbe -T ./release.zip "https://artifactory.webelight.co.in/artifactory/travel-connect-mobile/travel-connect-stage-apk-$BUILD_NUMBER"
+					'''
+				}
+                    
+                       }
+                       catch(Exception e) {
+                      echo "FAILED ${e}"
+                   //   slackSend (color: '#FF0000', message: "Failed at Building Application stage - TRAVEL-CONNECT MOBILE: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team" , channel: "mobile-builds" )  
+                      currentBuild.result = 'FAILURE'
+                      throw e
+                    }
+                   }
+               }
+        }
+      
+        stage('Generating APK FILE') {
+            steps{
+                script{
+                    try{
+                    //   slackSend (color: '#FFFF00', message: "Generating APK FILE stage started - TRAVEL-CONNECT MOBILE STARTED-Branch-${Branch} : '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "mobile-builds" )
+                        
+                        
+                        if( "${params.Server}" == 'dev')  {
+					        
+                            slackUploadFile channel: 'mobile-builds', credentialId: 'slack-tocken', filePath: 'build/app/outputs/apk/development/release/*_arm64-v8a.apk', initialComment: 'TRAVEL-CONNECT MOBILE APK file For Dev'
+					        
+					    }
+				        else if("${params.Server}" == 'prod')  {
+					    
+                            slackUploadFile channel: 'mobile-builds', credentialId: 'slack-tocken', filePath: 'build/app/outputs/apk/production/release/*_arm64-v8a.apk', initialComment: 'TRAVEL-CONNECT MOBILE APK file for prod'
+					   
+				        }
+				        else if("${params.Server}" == 'stage')  {
+					    
+                            slackUploadFile channel: 'mobile-builds', credentialId: 'slack-tocken', filePath: 'build/app/outputs/apk/stage/release/*_arm64-v8a.apk', initialComment: 'TRAVEL-CONNECT MOBILE APK file for stage'
+					
+				        }
+                        
+                        archiveArtifacts artifacts: '**/*.apk', fingerprint: true, onlyIfSuccessful: true                
+                     //   slackSend (color: 'good', message: "SUCCESSFUL-deployed: '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "mobile-builds" )
+                    }
+                    catch(Exception e) {
+                      echo "FAILED ${e}"
+                     // slackSend (color: '#FF0000', message: "Failed at Generating APK FILE stage - TRAVEL-CONNECT MOBILE: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team" , channel: "mobile-builds" )  
+                      currentBuild.result = 'FAILURE'
+                      throw e
+                    }
+                }
+            }
+        }
+    
+      }
+}
