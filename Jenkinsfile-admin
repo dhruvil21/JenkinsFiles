@@ -1,0 +1,175 @@
+pipeline {
+  agent {label 'java-jnlp'}
+  tools {nodejs "node1"}
+  parameters {
+    gitParameter branchFilter: 'origin/(.*)', defaultValue: 'master', name: 'Branch', type: 'PT_BRANCH'
+  }
+
+stages { 
+     stage('Preparation') {
+         steps {
+        sh 'rm -rf *'
+     } }
+     stage('Cloning the Project') {
+         steps {
+             script {
+        try{        
+            def cause = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+            slackSend (color: '#FFFF00', message: "Cloning the Project stage started - LoveBell-ADMIN STARTED-Branch-${Branch}: Job '${env.JOB_NAME} ${cause.userName} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )
+            echo "flag: ${params.Branch}"
+            git branch: "${params.Branch}", credentialsId: '78100a27-6595-4639-85fb-7a9eaabc2f84', url: 'https://gitlab.com/webelight/love-bell/love-bell-admin.git'
+        }
+        catch(Exception e) {
+          echo "FAILED ${e}"
+          slackSend (color: '#FF0000', message: "Failed at Cloning the Project stage - LoveBell-ADMIN: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team" , channel: "jenkins" )  
+          currentBuild.result = 'FAILURE'
+          throw e
+        } }
+} }
+
+        stage('Sonarqube Analysis'){
+            steps {
+                script{
+                  try{
+                  sh ' yarn add typescript@3.8'
+                def scannerHome = tool 'sonarqube';
+                withSonarQubeEnv("sonarqube") {
+                sh " ${scannerHome}/bin/sonar-scanner\
+                -Dsonar.projectKey=lovebell-admin\
+                -Dsonar.exclusions=node_modules/**,**/*.java \
+                -Dsonar.ts.coverage.lcovReportPath=coverage/raze/lcov.info \
+                -Dsonar.sources=/home/jenkins/workspace/Lovebell-client/lovebell-admin \
+                -Dsonar.host.url=https://sonarqube.webelight.co.in  \
+                -Dsonar.login=6d359b78e83dbed4519a1562eb3b806a22e47c38"
+                }
+    }
+                catch(Exception e){
+                      echo "FAILED ${e}"
+                      slackSend (color: '#FF0000', message: "Failed at Sonarqube Analysis stage - lovebell-admin: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team" , channel: "jenkins" )  
+                      currentBuild.result = 'FAILURE'
+                      throw e
+                      }      }
+    }
+  }
+        stage('Removing the Old Code') {
+            steps {
+                script {
+            try{        
+               slackSend (color: '#FFFF00', message: "Removing the Old Code stage started - LoveBell-ADMIN : Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )
+               if( "${params.Server}" == 'production') {
+               sh '''  
+                cat <<EOF | ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-111-175-40.ap-south-1.compute.amazonaws.com 'cat - > /var/www/love-bell-admin/before_update.sh'
+                #!/bin/bash
+                if [ -d "/var/www/love-bell-admin" ]; then
+                cd /var/www/love-bell-admin
+                rm -rf build
+                echo "Removed"
+                else
+                echo "Failed to find the path to delete build folder"
+                exit 1
+                fi
+EOF
+ssh ubuntu@ec2-3-111-175-40.ap-south-1.compute.amazonaws.com bash /var/www/love-bell-admin/before_update.sh
+            ''' 
+               }
+               else if("${params.Server}" == 'development') {
+                  sh '''  
+                cat <<EOF | ssh -o StrictHostKeyChecking=no ubuntu@ec2-43-204-63-239.ap-south-1.compute.amazonaws.com 'cat - > /var/www/love-bell-admin/before_update.sh'
+                #!/bin/bash
+                if [ -d "/var/www/love-bell-admin" ]; then
+                cd /var/www/love-bell-admin
+                rm -rf build
+                echo "Removed"
+                else
+                echo "Failed to find the path to delete build folder"
+                exit 1
+                fi
+EOF
+ssh ubuntu@ec2-43-204-63-239.ap-south-1.compute.amazonaws.com bash /var/www/love-bell-admin/before_update.sh
+            ''' 
+               }
+            }
+            
+             catch(Exception e) {
+               echo "FAILED ${e}"
+               slackSend (color: '#FF0000', message: "Failed at Removing the Old Code stage - LoveBell-ADMIN: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )  
+               currentBuild.result = 'FAILURE'
+               throw e
+        } }
+} }
+
+stage("Transfering the Code") {
+        steps {
+            script {
+        try{
+            slackSend (color: '#FFFF00', message: "Building the Code stage started - LoveBell-ADMIN : Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )
+                 if( "${params.Server}" == 'production')  {
+                 sh 'tar -czf - ./ | ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-111-175-40.ap-south-1.compute.amazonaws.com "tar -C /var/www/love-bell-admin/ -xzf -"'
+           }
+                 else if("${params.Server}" == 'development')  {
+                 sh 'tar -czf - ./ | ssh -o StrictHostKeyChecking=no ubuntu@ec2-43-204-63-239.ap-south-1.compute.amazonaws.com "tar -C /var/www/love-bell-admin/ -xzf -"'  
+          }  
+    }
+        catch(Exception e) {
+             echo "FAILED ${e}"
+             slackSend (color: '#FF0000', message: "Failed at Building the Code stage - LoveBell-ADMIN: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team " , channel: "jenkins" )  
+             currentBuild.result = 'FAILURE'
+             throw e
+            } }
+} }
+
+         stage('Building the Code') {
+             steps {
+                 script {
+            try {
+             slackSend (color: '#FFFF00', message: "Building the Code stage started - LoveBell-ADMIN : Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )
+                if( "${params.Server}" == 'production') {
+                sh '''  
+                cat <<EOF | ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-111-175-40.ap-south-1.compute.amazonaws.com 'cat - > /var/www/love-bell-admin/after_update.sh'
+                #!/bin/bash
+                cd /var/www/love-bell-admin/
+                aws s3 cp s3://lovebell-env/lovebell-admin/production/.env . --profile lovebell
+                rm -rf node_modules
+                source /home/ubuntu/.nvm/nvm.sh
+                yarn install
+                CI=false yarn run build
+                zip -r build.zip build
+                ls -l
+                curl -uadmin:8g4k2NjMSKuqQbbe -T ./build.zip "https://artifactory.webelight.co.in/artifactory/lovebell-admin/lovebell-$BUILD_NUMBER"
+EOF
+ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-111-175-40.ap-south-1.compute.amazonaws.com bash /var/www/love-bell-admin/after_update.sh
+'''
+               }
+             else if( "${params.Server}" == 'development') {
+               sh '''
+                cat <<EOF | ssh -o StrictHostKeyChecking=no ubuntu@ec2-43-204-63-239.ap-south-1.compute.amazonaws.com 'cat - > /var/www/love-bell-admin/after_update.sh'
+                #!/bin/bash
+                cd /var/www/love-bell-admin/
+                aws s3 cp s3://lovebell-env/lovebell-admin/development/.env . --profile lovebell
+                rm -rf node_modules
+                source /home/ubuntu/.nvm/nvm.sh
+                yarn install
+                CI=false yarn run build
+                zip -r build.zip build
+                ls -l
+                curl -uadmin:8g4k2NjMSKuqQbbe -T ./build.zip "https://artifactory.webelight.co.in/artifactory/lovebell-admin/lovebell-$BUILD_NUMBER"
+EOF
+ssh -o StrictHostKeyChecking=no ubuntu@ec2-43-204-63-239.ap-south-1.compute.amazonaws.com bash /var/www/love-bell-admin/after_update.sh
+'''                
+             }
+            }
+
+         
+         catch(Exception e) {
+          echo "FAILED ${e}"
+          slackSend (color: '#FF0000', message: "Failed at Building the Code stage - LoveBell-ADMIN: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team" , channel: "jenkins" )  
+          currentBuild.result = 'FAILURE'
+          throw e
+        } }
+}
+         }
+         
+          
+
+}
+}
