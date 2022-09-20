@@ -1,0 +1,49 @@
+pipeline {
+  agent {label 'master'}
+    tools {nodejs "node1"}
+stages { 
+     stage('preparation') {
+         steps {
+             script {
+        try{        
+            def cause = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+            slackSend (color: '#FFFF00', message: "Preparation stage started - Lovebell-Subscription STARTED-Branch-${Branch}: Job '${env.JOB_NAME} ${cause.userName} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )
+            echo "flag: ${params.Branch}"
+            echo "flag: ${params.ENV}"
+            echo "flag: ${params.Stage}"
+            git branch: "${params.Branch}", credentialsId: '78100a27-6595-4639-85fb-7a9eaabc2f84', url: 'https://gitlab.com/webelight/love-bell/lovebell-subscription.git'
+        }
+        catch(Exception e) {
+          echo "FAILED ${e}"
+          //slackSend (color: '#FF0000', message: "Failed Preparation stage - Lovebell-Subscription: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team" , channel: "jenkins" )  
+          currentBuild.result = 'FAILURE'
+          throw e
+        } } }
+}
+         stage('Deploying an Application') {
+             steps {
+                 script {
+         try {
+                 // Building an application
+            //slackSend (color: '#FFFF00', message: "Building stage started - Lovebell-Subscription : Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )
+              if( "${params.ENV}" == 'lovebell-stag')  {
+                sh 'aws s3 cp s3://lovebell-env/lovebell-subscription/staging/.env . --profile lovebell-jenkins'
+                sh "npm install -g serverless && export AWS_PROFILE=lovebell-jenkins && npm install && sls deploy --stage ${params.Stage}"
+                //slackSend (color: '#00FF00', message: "SUCCESSFUL-deployed ${params.ENV}-${params.Stage}-Lovebell-Subscription")
+              }
+              else if( "${params.ENV}" == 'lovebell-dev')  {
+                sh 'aws s3 cp s3://lovebell-env/lovebell-subscription/development/.env . --profile lovebell-jenkins'
+                sh "npm install -g serverless && export AWS_PROFILE=lovebell-jenkins && npm install && sls deploy --stage ${params.Stage}"
+                //slackSend (color: '#00FF00', message: "SUCCESSFUL-deployed ${params.ENV}-${params.Stage}-Lovebell-Subscription")
+              }
+             }
+         catch(Exception e) {
+          echo "FAILED ${e}"
+          //slackSend (color: '#FF0000', message: "Failed Preparation stage - Lovebell-Subscription: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team" , channel: "jenkins" )  
+          currentBuild.result = 'FAILURE'
+          throw e
+        } } }
+}
+
+}
+}
