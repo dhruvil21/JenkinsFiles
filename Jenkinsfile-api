@@ -1,0 +1,168 @@
+pipeline {
+  agent {label 'java-jnlp'}
+  parameters {
+    gitParameter branchFilter: 'origin/(.*)', defaultValue: 'master', name: 'Branch', type: 'PT_BRANCH'
+  }
+stages { 
+     stage('Preparation') {
+         steps {
+        sh 'rm -rf *'
+     } }
+     stage('Cloning the Project') {
+         steps {
+             script {
+        try{        
+            def cause = currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')
+            slackSend (color: '#FFFF00', message: "Cloning the Project stage started - LoveBell-API STARTED-Branch-${Branch}: Job '${env.JOB_NAME} ${cause.userName} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )
+            echo "flag: ${params.Branch}"
+            git branch: "${params.Branch}", credentialsId: '78100a27-6595-4639-85fb-7a9eaabc2f84', url: 'https://gitlab.com/webelight/love-bell/lovebell-backend-python.git'
+        }
+        catch(Exception e) {
+          echo "FAILED ${e}"
+          slackSend (color: '#FF0000', message: "Failed at Cloning the Project stage - LoveBell-API: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team " , channel: "jenkins" )  
+          currentBuild.result = 'FAILURE'
+          throw e
+        } }
+} }
+
+    stage('Sonarqube Analysis'){
+            steps {
+                script{
+                    sh ' yarn add typescript@3.8'
+                def scannerHome = tool 'sonarqube';
+                withSonarQubeEnv("sonarqube") {
+                sh " ${scannerHome}/bin/sonar-scanner\
+                -Dsonar.projectKey=lovebell-api\
+                -Dsonar.exclusions=node_modules/**,**/*.java \
+                -Dsonar.ts.coverage.lcovReportPath=coverage/raze/lcov.info \
+                -Dsonar.sources=/home/jenkins/workspace/Lovebell-client/lovebell-api \
+                -Dsonar.host.url=https://sonarqube.webelight.co.in \
+                -Dsonar.login=569bb48e4a67c3eb752a9a9f8fbe55f0c3ab54ed"
+                }
+    }
+    }
+}
+
+
+ stage('Removing the Old Code') {
+        steps {
+            script {
+            try{        
+             slackSend (color: '#FFFF00', message: "Removing the Old Code stage started - LoveBell-API : Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )
+             if( "${params.Server}" == 'Staging')  {
+                sh '''  
+                cat <<EOF | ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-111-175-40.ap-south-1.compute.amazonaws.com 'cat - > /var/www/lovebell-backend-python/before_update.sh'
+                #!/bin/bash
+                if [ -d "/var/www/lovebell-backend-python" ]; then
+                cd /var/www/lovebell-backend-python
+                rm -rf *
+                echo "Removed"
+                else
+                echo "Failed to find the path to delete the contents inside the folder"
+                exit 1
+                fi
+EOF
+ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-111-175-40.ap-south-1.compute.amazonaws.com bash  /var/www/lovebell-backend-python/before_update.sh
+'''
+            }
+             else if("${params.Server}" == 'development')  {
+                sh '''  
+                cat <<EOF | ssh -o StrictHostKeyChecking=no ubuntu@ec2-43-204-63-239.ap-south-1.compute.amazonaws.com 'cat - > /var/www/lovebell-backend-python/before_update.sh'
+                #!/bin/bash
+                if [ -d "/var/www/lovebell-backend-python" ]; then
+                cd /var/www/lovebell-backend-python-dev
+                rm -rf *
+                echo "Removed"
+                else
+                echo "Failed to find the path to delete the contents inside the folder"
+                exit 1
+                fi
+EOF
+ssh -o StrictHostKeyChecking=no ubuntu@ec2-43-204-63-239.ap-south-1.compute.amazonaws.com bash /var/www/lovebell-backend-python/before_update.sh
+'''
+             }
+             }
+             catch(Exception e) {
+                echo "FAILED ${e}"
+                slackSend (color: '#FF0000', message: "Failed at Removing the Old Code stage - LoveBell-API: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team " , channel: "jenkins" )  
+                currentBuild.result = 'FAILURE'
+                throw e
+        } }
+}}
+stage("Building the Code") {
+        steps {
+            script {
+        try{
+            slackSend (color: '#FFFF00', message: "Building the Code stage started - LoveBell-API : Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )
+                 if( "${params.Server}" == 'Staging')  {
+                 sh 'tar -czf - ./ | ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-111-175-40.ap-south-1.compute.amazonaws.com "tar -C /var/www/lovebell-backend-python/ -xzf -"'
+           }
+                 else if("${params.Server}" == 'development')  {
+                 sh 'tar -czf - ./ | ssh -o StrictHostKeyChecking=no ubuntu@ec2-43-204-63-239.ap-south-1.compute.amazonaws.com "tar -C /var/www/lovebell-backend-python/ -xzf -"'  
+          }  
+    }
+        catch(Exception e) {
+             echo "FAILED ${e}"
+             slackSend (color: '#FF0000', message: "Failed at Building the Code stage - LoveBell-API: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team " , channel: "jenkins" )  
+             currentBuild.result = 'FAILURE'
+             throw e
+            } }
+} }
+        stage('Restarting Application') {
+            steps {
+                script {
+            try{       
+                 slackSend (color: '#FFFF00', message: "Restarting Application stage started - LoveBell-API : Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' " , channel: "jenkins" )
+                 if( "${params.Server}" == 'Staging') {
+                     sh '''
+                    cat <<EOF | ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-111-175-40.ap-south-1.compute.amazonaws.com 'cat - > /var/www/lovebell-backend-python/restart.sh'
+                    #!/bin/bash
+                    export PATH="/home/ubuntu/miniconda3/bin:$PATH"
+                    echo $PATH
+                    cd /var/www/lovebell-backend-python
+                    aws s3 cp s3://lovebell-env/lovebell-api/staging/.env.staging . --profile lovebell
+                    mv .env.staging .env
+                    mv .env lovebell
+                    ls
+                    python manage.py migrate
+                    pip install -r requirements.txt
+                    pm2 delete "python manage.py runserver 127.0.0.1"
+                    pm2 start "python manage.py runserver 127.0.0.1:9000"
+EOF
+ssh -o StrictHostKeyChecking=no ubuntu@ec2-3-111-175-40.ap-south-1.compute.amazonaws.com bash /var/www/lovebell-backend-python/restart.sh
+                    '''
+                 echo 'One way or another, I have finished'
+                 slackSend (color: '#00FF00', message: "SUCCESSFUL-deployed at lovebell-api.webelight.co.in")
+                 }   
+                 else if("${params.Server}" == 'development') { 
+                 sh '''
+                 cat <<EOF | ssh -o StrictHostKeyChecking=no ubuntu@ec2-43-204-63-239.ap-south-1.compute.amazonaws.com 'cat - > /var/www/lovebell-backend-python/restart.sh'
+                    #!/bin/bash
+                    export PATH="/root/miniconda3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+                    echo /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+                    cd /var/www/lovebell-backend-python
+                    aws s3 cp s3://lovebell-env/lovebell-api/development/.env.development . --profile lovebell
+                    mv .env.development .env
+                    mv .env lovebell
+                    ls
+                    python3 manage.py migrate
+                    pip install -r requirements.txt
+                    pm2 delete "python3 manage.py runserver 127.0.0.1"
+                    pm2 start "python3 manage.py runserver 127.0.0.1:9000"
+EOF
+ssh -o StrictHostKeyChecking=no ubuntu@ec2-43-204-63-239.ap-south-1.compute.amazonaws.com bash /var/www/lovebell-backend-python/restart.sh
+                 '''
+                 echo 'One way or another, I have finished'
+                 slackSend (color: '#00FF00', message: "SUCCESSFUL-deployed at lovebell-dev-api.webelight.co.in")
+                }
+          }    
+            catch(Exception e) {
+                 echo "FAILED ${e}"
+                 slackSend (color: '#FF0000', message: "Failed at Restarting Application stage - LoveBell-API: Job '${env.JOB_NAME} [${env.BUILD_NUMBER}]' @devops-team " , channel: "jenkins" )  
+                 currentBuild.result = 'FAILURE'
+                 throw e
+             } }
+} }
+        
+}
+}
